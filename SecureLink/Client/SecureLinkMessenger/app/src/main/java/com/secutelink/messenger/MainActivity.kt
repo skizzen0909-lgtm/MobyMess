@@ -134,4 +134,9 @@ class MainActivity : ComponentActivity() {
         
         return phoneNumber
     }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        wsClient.disconnect()
+    }
 }

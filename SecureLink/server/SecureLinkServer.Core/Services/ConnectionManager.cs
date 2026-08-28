@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using SecureLinkServer.Core.Interfaces;
 using SecureLinkServer.Core.Models;
+using SecureLinkServer.Services;
 
 namespace SecureLinkServer.Core.Services;
 
@@ -98,6 +99,9 @@ public class WebSocketClientConnection : IClientConnection
     public string UserId => _userId;
     public string ConnectionId { get; } = Guid.NewGuid().ToString();
     public DateTime ConnectedAt { get; } = DateTime.UtcNow;
+    
+    // Состояние для приёма файлов с chunking
+    public Dictionary<string, FileReceivingState> FileReceivingState { get; } = new();
 
     public WebSocketClientConnection(
         System.Net.WebSockets.WebSocket socket,
