@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SecureLinkServer</RootNamespace>
+    <AssemblyName>SecureLinkServer</AssemblyName>
+    <Version>1.0.0</Version>
+    <Authors>SecureLink Team</Authors>
+    <Description>SecureLink Messenger Server - Windows Server Application</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.WebSockets" Version="2.2.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="System.Data.SQLite" Version="1.0.118" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SecureLinkServer.Core\SecureLinkServer.Core.csproj" />
+    <ProjectReference Include="..\SecureLinkServer.Data\SecureLinkServer.Data.csproj" />
+    <ProjectReference Include="..\SecureLinkServer.UI\SecureLinkServer.UI.csproj" />
+  </ItemGroup>
+
+</Project>

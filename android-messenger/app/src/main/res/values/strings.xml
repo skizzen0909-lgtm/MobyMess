@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Мессенджер</string>
+    <string name="settings">Настройки</string>
+    <string name="chats">Чаты</string>
+    <string name="contacts">Контакты</string>
+    <string name="new_chat">Новый чат</string>
+    <string name="create_group">Создать группу</string>
+    <string name="send">Отправить</string>
+    <string name="type_message">Введите сообщение</string>
+    <string name="attach_file">Прикрепить файл</string>
+    <string name="record_voice">Записать голосовое</string>
+    <string name="server_ip">IP адрес сервера</string>
+    <string name="server_port">Порт</string>
+    <string name="user_name">Ваше имя</string>
+    <string name="save">Сохранить</string>
+    <string name="check_connection">Проверить соединение</string>
+    <string name="group_name">Название группы</string>
+    <string name="select_contacts">Выбрать контакты</string>
+</resources>
