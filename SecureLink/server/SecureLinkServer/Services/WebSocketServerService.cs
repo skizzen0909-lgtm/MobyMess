@@ -191,8 +191,8 @@ public class WebSocketServerService
         var buffer = new byte[8192];
         var receivedData = new MemoryStream();
         
-        // Для приёма файлов с chunking
-        var fileReceivingState = new Dictionary<string, FileReceivingState>();
+        // Для приёма файлов с chunking - используем состояние на уровне подключения
+        var fileReceivingState = connection.FileReceivingState;
 
         while (!cancellationToken.IsCancellationRequested && 
                connection is { } && 
@@ -573,25 +573,35 @@ public class WebSocketServerService
             _ => "application/octet-stream"
         };
     }
-    
-    /// <summary>
-    /// Состояние приёма файла
-    /// </summary>
-    private class FileReceivingState
-    {
-        public string FileName { get; set; } = "";
-        public string OriginalFileName { get; set; } = "";
-        public MessageType FileType { get; set; }
-        public long FileSize { get; set; }
-        public string SenderId { get; set; } = "";
-        public string? RecipientId { get; set; }
-        public string? GroupId { get; set; }
-        public string TempFilePath { get; set; } = "";
-        public long ReceivedBytes { get; set; }
-        public int ChunksReceived { get; set; }
-    }
-    
-    private readonly Dictionary<string, FileReceivingState> fileReceivingState = new();
+}
+
+/// <summary>
+/// Состояние приёма файла
+/// </summary>
+public class FileReceivingState
+{
+    public string FileName { get; set; } = "";
+    public string OriginalFileName { get; set; } = "";
+    public MessageType FileType { get; set; }
+    public long FileSize { get; set; }
+    public string SenderId { get; set; } = "";
+    public string? RecipientId { get; set; }
+    public string? GroupId { get; set; }
+    public string TempFilePath { get; set; } = "";
+    public long ReceivedBytes { get; set; }
+    public int ChunksReceived { get; set; }
+}
+
+public class WebSocketServerService
+{
+    private readonly HttpListener _listener;
+    private readonly ServerConfig _config;
+    private readonly IConnectionManager _connectionManager;
+    private readonly IMessageHandler _messageHandler;
+    private readonly IAuthService _authService;
+    private readonly ILogger<WebSocketServerService> _logger;
+    private CancellationTokenSource? _cts;
+    private bool _isRunning;
 
     private async Task HandleHttpRequestAsync(HttpListenerContext context)
     {
