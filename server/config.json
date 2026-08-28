@@ -1,0 +1,8 @@
+{
+  "host": "0.0.0.0",
+  "port": 8080,
+  "database_path": "./data/database.db",
+  "media_path": "./data/media",
+  "max_file_size": 104857600,
+  "log_level": "INFO"
+}

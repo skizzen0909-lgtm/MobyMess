@@ -1,0 +1,39 @@
+```
+# Build artifacts
+*.apk
+*.aar
+*.jar
+*.class
+*.dex
+build/
+app/build/
+.gradle/
+target/
+
+# Dependencies
+node_modules/
+vendor/
+lib/
+
+# Environment specific
+.env
+.env.local
+.env.*
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.tmp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local configuration
+local.properties
+```
