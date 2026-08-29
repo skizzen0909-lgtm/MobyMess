@@ -1,9 +1,7 @@
-```
+```gitignore
 # Build artifacts
-**/bin/
-**/obj/
-**/Debug/
-**/Release/
+bin/
+obj/
 *.dll
 *.exe
 *.pdb
@@ -13,79 +11,31 @@
 # Dependencies
 packages/
 node_modules/
-**/node_modules/
+vendor/
 
-# IDE files
-.vs/
-**/.vs/
-.vscode/
-**/.vscode/
-*.user
-*.userosscache
-*.suo
-*.csproj.user
-*.userprefs
+# Logs
+*.log
 
-# OS generated files
-.DS_Store
-Thumbs.db
-ehthumbs.db
-Icon?
-desktop.ini
-
-# Environment specific
+# Environment
 .env
 .env.local
 .env.*
 !*.env.example
 
-# Logs
-*.log
+# OS generated files
+.DS_Store
+Thumbs.db
 
-# User-specific configurations
-**/appsettings.*.json
-!**/appsettings.json
-!**/appsettings.Development.json
-!**/appsettings.Production.json
+# Visual Studio
+*.user
+*.userosscache
+*.suo
+*.userprefs
+.vs/
+.vscode/
 
-# Test results
-TestResults/
-**/TestResults/
-
-# Temporary files
-*.tmp
-*.temp
-*.bak
-
-# NuGet packages
-*.nupkg
-*.snupkg
-packages.lock.json
-
-# Visual Studio Code
-.vscode/tasks.json
-.vscode/launch.json
-
-# JetBrains Rider
-.idea/
-*.DotSettings
+# Resharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
 *.DotSettings.user
-
-# Build outputs
-**/bin/
-**/obj/
-**/out/
-dist/
-build/
-target/
-
-# Python related (if any Python files exist in project)
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
 ```

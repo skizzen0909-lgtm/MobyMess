@@ -5,7 +5,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using SecureLink.Server.Core.Data;
 using SecureLink.Server.Core.Models;
-using SecureLinkServer.Security;
+using SecureLink.Server.Core.Security;
 
 namespace SecureLink.Server.Core.Services;
 
@@ -90,7 +90,7 @@ public class WebSocketServer
                     }
 
                     var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                    await ProcessMessageAsync(message, clientId, ref userId);
+                    userId = await ProcessMessageAsync(message, clientId, userId);
                 }
                 catch (WebSocketException ex)
                 {
@@ -130,7 +130,7 @@ public class WebSocketServer
         }
     }
 
-    private async Task ProcessMessageAsync(string json, string clientId, ref string? userId)
+    private async Task<string?> ProcessMessageAsync(string json, string clientId, string? userId)
     {
         try
         {
@@ -140,21 +140,20 @@ public class WebSocketServer
             if (!root.TryGetProperty("action", out var actionElem))
             {
                 Console.WriteLine("Получено сообщение без действия");
-                return;
+                return userId;
             }
             
             var action = actionElem.GetString();
             if (string.IsNullOrEmpty(action))
             {
                 Console.WriteLine("Пустое действие в сообщении");
-                return;
+                return userId;
             }
 
             switch (action)
             {
                 case "auth":
-                    userId = await HandleAuthAsync(root, clientId);
-                    break;
+                    return await HandleAuthAsync(root, clientId);
                 case "send_message":
                     if (!string.IsNullOrEmpty(userId))
                         await HandleSendMessageAsync(root, clientId, userId);
@@ -177,14 +176,17 @@ public class WebSocketServer
                     Console.WriteLine($"Неизвестное действие: {action}");
                     break;
             }
+            return userId;
         }
         catch (JsonException ex)
         {
             Console.WriteLine($"Ошибка парсинга JSON от клиента {clientId}: {ex.Message}");
+            return userId;
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Ошибка обработки сообщения от клиента {clientId}: {ex.Message}");
+            return userId;
         }
     }
 
