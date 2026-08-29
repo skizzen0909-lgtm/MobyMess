@@ -3,7 +3,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using System.Web;
 
-namespace SecureLinkServer.Security
+namespace SecureLink.Server.Core.Security
 {
     /// <summary>
     /// Класс для валидации входных данных и защиты от уязвимостей

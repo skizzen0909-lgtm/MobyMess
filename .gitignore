@@ -1,72 +1,47 @@
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-
-# Environment
-.env
-.env.local
-*.env.*
-
-# Editors
-.vscode/
-.idea/
-
-# Dependencies
-node_modules/
-__pycache__/
-*.egg-info/
-dist/
-build/
-target/
-.venv/
-venv/
-.mypy_cache/
-.pytest_cache/
-.gradle/
-julia-*/
-zig*/
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# Compiled files
-*.pyc
-*.class
-*.o
+```gitignore
+# Build artifacts
+*.obj
 *.exe
 *.dll
-*.so
-*.a
-*.obj
-*.out
+*.pdb
+*.userprefs
+*.cache
+*.log
 
-# Coverage
-coverage/
-htmlcov/
-.coverage
+# Dependencies
+packages/
+node_modules/
+lib/
 
-# Compressed files
-*.zip
-*.gz
-*.tar
-*.tgz
-*.bz2
-*.xz
-*.7z
-*.rar
-*.zst
-*.lz4
-*.lzh
-*.cab
-*.arj
-*.rpm
-*.deb
-*.Z
-*.lz
-*.lzo
-*.tar.gz
-*.tar.bz2
-*.tar.xz
-*.tar.zst
+# IDE specific
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# OS generated
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+desktop.ini
+
+# Configuration
+appsettings.Production.json
+appsettings.Development.json
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Compiled files
+bin/
+obj/
+out/
+debug/
+release/
+```
