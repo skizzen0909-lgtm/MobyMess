@@ -32,6 +32,8 @@ public class AppDbContext : DbContext
             entity.Property(e => e.Content).IsRequired();
             entity.HasIndex(e => e.RecipientId);
             entity.HasIndex(e => e.GroupId);
+            // Настройка свойства FileSize по умолчанию
+            entity.Property(e => e.FileSize).HasDefaultValue(0);
         });
 
         modelBuilder.Entity<User>(entity =>

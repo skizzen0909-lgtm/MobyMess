@@ -1,47 +1,38 @@
-```gitignore
+```
 # Build artifacts
-*.obj
-*.exe
+bin/
+obj/
 *.dll
+*.exe
 *.pdb
-*.userprefs
-*.cache
-*.log
+*.config
+*.runtimeconfig.json
 
 # Dependencies
 packages/
 node_modules/
 lib/
 
-# IDE specific
-.vs/
-.vscode/
-.idea/
-*.user
-*.suo
-*.userosscache
-*.sln.docstates
+# Logs
+*.log
 
-# OS generated
+# Environment
+.env
+.env.local
+*.user
+*.userosscache
+*.suo
+
+# OS generated files
 .DS_Store
 Thumbs.db
-ehthumbs.db
-Icon?
-desktop.ini
 
-# Configuration
-appsettings.Production.json
-appsettings.Development.json
+# IDE
+.vs/
+.idea/
+*.swp
+*.swo
 
-# Temporary files
-*.tmp
-*.temp
-*.bak
-
-# Compiled files
-bin/
-obj/
-out/
-debug/
-release/
+# Test results
+TestResults/
 ```

@@ -74,6 +74,9 @@ public class WebSocketServer
         var buffer = new byte[1024 * 4];
         string? userId = null;
         
+        // Добавляем сокет в словарь клиентов сразу при подключении
+        _clients[clientId] = webSocket;
+        
         try
         {
             Console.WriteLine($"Клиент подключен: {clientId}");
@@ -278,7 +281,7 @@ public class WebSocketServer
             
             if (!_clients.ContainsKey(clientId))
             {
-                _clients[clientId] = webSocket;
+                // WebSocket будет добавлен при первом сообщении, здесь только маппинг пользователя
             }
             
             var response = new 
