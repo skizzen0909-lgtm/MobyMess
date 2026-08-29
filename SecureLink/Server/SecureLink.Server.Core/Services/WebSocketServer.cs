@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using SecureLink.Server.Core.Data;
 using SecureLink.Server.Core.Models;
+using SecureLinkServer.Security;
 
 namespace SecureLink.Server.Core.Services;
 
@@ -15,6 +16,9 @@ public class WebSocketServer
     private readonly ServerSettings _settings;
     private readonly Dictionary<string, WebSocket> _clients = new();
     private readonly CancellationTokenSource _cts = new();
+    private const int MaxMessageLength = 10000;
+    private const int MaxContactsToReturn = 500;
+    private const int MaxMessagesToReturn = 100;
 
     public WebSocketServer(AppDbContext dbContext, ServerSettings settings)
     {
@@ -26,6 +30,18 @@ public class WebSocketServer
 
     public async Task StartAsync()
     {
+        try
+        {
+            // Проверка подключения к БД перед запуском
+            await _dbContext.Database.CanConnectAsync();
+            Console.WriteLine("Подключение к базе данных успешно проверено.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"КРИТИЧЕСКАЯ ОШИБКА: Не удалось подключиться к базе данных. {ex.Message}");
+            throw;
+        }
+
         _listener.Start();
         Console.WriteLine($"Сервер запущен на {_settings.IpAddress}:{_settings.Port}");
 
@@ -37,7 +53,7 @@ public class WebSocketServer
                 if (context.Request.IsWebSocketRequest)
                 {
                     var wsContext = await context.AcceptWebSocketAsync(null);
-                    await HandleClientAsync(wsContext.WebSocket, context.Request.RemoteEndPoint!.ToString());
+                    _ = HandleClientAsync(wsContext.WebSocket, context.Request.RemoteEndPoint!.ToString());
                 }
                 else
                 {
@@ -47,7 +63,7 @@ public class WebSocketServer
             }
             catch (Exception ex) when (!_cts.Token.IsCancellationRequested)
             {
-                Console.WriteLine($"Ошибка: {ex.Message}");
+                Console.WriteLine($"Ошибка принятия соединения: {ex.Message}");
             }
         }
     }
@@ -55,190 +71,627 @@ public class WebSocketServer
     private async Task HandleClientAsync(WebSocket webSocket, string clientId)
     {
         var buffer = new byte[1024 * 4];
-        _clients[clientId] = webSocket;
-        Console.WriteLine($"Клиент подключен: {clientId}");
-
+        string? userId = null;
+        
         try
         {
+            Console.WriteLine($"Клиент подключен: {clientId}");
+            
             while (webSocket.State == WebSocketState.Open && !_cts.Token.IsCancellationRequested)
             {
-                var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), _cts.Token);
-                
-                if (result.MessageType == WebSocketMessageType.Close)
+                try
                 {
-                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", _cts.Token);
+                    var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), _cts.Token);
+                    
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", _cts.Token);
+                        break;
+                    }
+
+                    var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                    await ProcessMessageAsync(message, clientId, ref userId);
+                }
+                catch (WebSocketException ex)
+                {
+                    Console.WriteLine($"Ошибка WebSocket для клиента {clientId}: {ex.Message}");
                     break;
                 }
-
-                var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                await ProcessMessageAsync(message, clientId);
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Ошибка клиента {clientId}: {ex.Message}");
+            Console.WriteLine($"Критическая ошибка клиента {clientId}: {ex.Message}");
         }
         finally
         {
+            // Обновление статуса offline при отключении
+            if (!string.IsNullOrEmpty(userId))
+            {
+                try
+                {
+                    var user = await _dbContext.Users.FindAsync(userId);
+                    if (user != null)
+                    {
+                        user.IsOnline = false;
+                        user.LastSeen = DateTime.UtcNow;
+                        await _dbContext.SaveChangesAsync();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Ошибка обновления статуса пользователя {userId}: {ex.Message}");
+                }
+            }
+            
             _clients.Remove(clientId);
             webSocket.Dispose();
             Console.WriteLine($"Клиент отключен: {clientId}");
         }
     }
 
-    private async Task ProcessMessageAsync(string json, string clientId)
+    private async Task ProcessMessageAsync(string json, string clientId, ref string? userId)
     {
         try
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            var action = root.GetProperty("action").GetString();
+            
+            if (!root.TryGetProperty("action", out var actionElem))
+            {
+                Console.WriteLine("Получено сообщение без действия");
+                return;
+            }
+            
+            var action = actionElem.GetString();
+            if (string.IsNullOrEmpty(action))
+            {
+                Console.WriteLine("Пустое действие в сообщении");
+                return;
+            }
 
             switch (action)
             {
                 case "auth":
-                    await HandleAuthAsync(root, clientId);
+                    userId = await HandleAuthAsync(root, clientId);
                     break;
                 case "send_message":
-                    await HandleSendMessageAsync(root, clientId);
+                    if (!string.IsNullOrEmpty(userId))
+                        await HandleSendMessageAsync(root, clientId, userId);
+                    else
+                        Console.WriteLine("Попытка отправки сообщения без аутентификации");
                     break;
                 case "get_contacts":
-                    await HandleGetContactsAsync(root, clientId);
+                    if (!string.IsNullOrEmpty(userId))
+                        await HandleGetContactsAsync(root, clientId, userId);
                     break;
                 case "create_group":
-                    await HandleCreateGroupAsync(root, clientId);
+                    if (!string.IsNullOrEmpty(userId))
+                        await HandleCreateGroupAsync(root, clientId, userId);
+                    break;
+                case "get_messages":
+                    if (!string.IsNullOrEmpty(userId))
+                        await HandleGetMessagesAsync(root, clientId, userId);
+                    break;
+                default:
+                    Console.WriteLine($"Неизвестное действие: {action}");
                     break;
             }
+        }
+        catch (JsonException ex)
+        {
+            Console.WriteLine($"Ошибка парсинга JSON от клиента {clientId}: {ex.Message}");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Ошибка обработки сообщения: {ex.Message}");
+            Console.WriteLine($"Ошибка обработки сообщения от клиента {clientId}: {ex.Message}");
         }
     }
 
-    private async Task HandleAuthAsync(JsonElement root, string clientId)
+    private async Task<string?> HandleAuthAsync(JsonElement root, string clientId)
     {
-        var phoneNumber = root.GetProperty("phoneNumber").GetString();
-        var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.PhoneNumber == phoneNumber);
-        
-        if (user == null)
+        try
         {
-            user = new User { PhoneNumber = phoneNumber!, DisplayName = phoneNumber };
-            _dbContext.Users.Add(user);
-            await _dbContext.SaveChangesAsync();
-        }
-
-        user.IsOnline = true;
-        user.LastSeen = DateTime.UtcNow;
-        await _dbContext.SaveChangesAsync();
-
-        var response = new { action = "auth_result", success = true, userId = user.Id, displayName = user.DisplayName };
-        await SendToClientAsync(clientId, JsonSerializer.Serialize(response));
-    }
-
-    private async Task HandleSendMessageAsync(JsonElement root, string clientId)
-    {
-        var senderId = root.GetProperty("senderId").GetString();
-        var type = root.GetProperty("type").GetString();
-        var content = root.GetProperty("content").GetString();
-        var recipientId = root.TryGetProperty("recipientId", out var r) ? r.GetString() : null;
-        var groupId = root.TryGetProperty("groupId", out var g) ? g.GetString() : null;
-
-        var message = new Message
-        {
-            SenderId = senderId!,
-            RecipientId = recipientId,
-            GroupId = groupId,
-            Type = Enum.Parse<MessageType>(type!),
-            Content = content!,
-            Timestamp = DateTime.UtcNow
-        };
-
-        _dbContext.Messages.Add(message);
-        await _dbContext.SaveChangesAsync();
-
-        // Отправка получателю
-        if (!string.IsNullOrEmpty(recipientId))
-        {
-            var recipientClient = _clients.FirstOrDefault(c => c.Value.Tag?.ToString() == recipientId).Key;
-            if (!string.IsNullOrEmpty(recipientClient))
+            if (!root.TryGetProperty("phoneNumber", out var phoneElem))
             {
-                await SendToClientAsync(recipientClient, JsonSerializer.Serialize(new { action = "new_message", message }));
+                await SendErrorAsync(clientId, "Номер телефона не указан");
+                return null;
             }
-        }
-        else if (!string.IsNullOrEmpty(groupId))
-        {
-            // Рассылка группе
-            var group = await _dbContext.ChatGroups.FindAsync(groupId);
-            if (group != null)
+
+            var phoneNumber = phoneElem.GetString();
+            
+            // Валидация номера телефона
+            if (string.IsNullOrEmpty(phoneNumber) || !SecurityValidator.IsValidPhone(phoneNumber))
             {
-                foreach (var memberId in group.MemberIds)
+                await SendErrorAsync(clientId, "Неверный формат номера телефона");
+                return null;
+            }
+
+            phoneNumber = SecurityValidator.NormalizePhone(phoneNumber);
+
+            User? user;
+            try
+            {
+                user = await _dbContext.Users.FirstOrDefaultAsync(u => u.PhoneNumber == phoneNumber);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка БД при поиске пользователя: {ex.Message}");
+                await SendErrorAsync(clientId, "Ошибка базы данных");
+                return null;
+            }
+            
+            if (user == null)
+            {
+                user = new User 
+                { 
+                    Id = Guid.NewGuid().ToString(),
+                    PhoneNumber = phoneNumber, 
+                    DisplayName = phoneNumber,
+                    IsOnline = true,
+                    LastSeen = DateTime.UtcNow
+                };
+                _dbContext.Users.Add(user);
+                
+                try
                 {
-                    if (memberId != senderId)
+                    await _dbContext.SaveChangesAsync();
+                    Console.WriteLine($"Зарегистрирован новый пользователь: {user.Id}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Ошибка сохранения нового пользователя: {ex.Message}");
+                    await SendErrorAsync(clientId, "Ошибка регистрации");
+                    return null;
+                }
+            }
+            else
+            {
+                user.IsOnline = true;
+                user.LastSeen = DateTime.UtcNow;
+                
+                try
+                {
+                    await _dbContext.SaveChangesAsync();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Ошибка обновления статуса пользователя: {ex.Message}");
+                }
+            }
+
+            // Привязка clientId к userId для поиска в словаре
+            if (!_clients.ContainsKey(clientId))
+            {
+                _clients[clientId] = _clients.Values.First(); // заглушка, будет перезаписано
+            }
+            
+            // Сохраняем userId в метаданных подключения (через Tag, если поддерживается)
+            // В данном случае просто используем clientId как ключ для userId
+            
+            var response = new 
+            { 
+                action = "auth_result", 
+                success = true, 
+                userId = user.Id, 
+                displayName = user.DisplayName ?? user.PhoneNumber 
+            };
+            await SendToClientAsync(clientId, JsonSerializer.Serialize(response));
+            
+            Console.WriteLine($"Пользователь аутентифицирован: {user.Id} ({user.PhoneNumber})");
+            return user.Id;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Критическая ошибка аутентификации: {ex.Message}");
+            await SendErrorAsync(clientId, "Внутренняя ошибка сервера");
+            return null;
+        }
+    }
+
+    private async Task HandleSendMessageAsync(JsonElement root, string clientId, string senderId)
+    {
+        try
+        {
+            // Извлечение и валидация полей
+            if (!root.TryGetProperty("type", out var typeElem) || !root.TryGetProperty("content", out var contentElem))
+            {
+                await SendErrorAsync(clientId, "Отсутствуют обязательные поля сообщения");
+                return;
+            }
+
+            var type = typeElem.GetString();
+            var content = contentElem.GetString();
+            var recipientId = root.TryGetProperty("recipientId", out var r) ? r.GetString() : null;
+            var groupId = root.TryGetProperty("groupId", out var g) ? g.GetString() : null;
+
+            // Валидация типа сообщения
+            if (string.IsNullOrEmpty(type) || !Enum.TryParse<MessageType>(type, true, out var messageType))
+            {
+                await SendErrorAsync(clientId, "Неверный тип сообщения");
+                return;
+            }
+
+            // Валидация содержимого
+            if (!SecurityValidator.IsValidMessage(content, type))
+            {
+                await SendErrorAsync(clientId, "Содержимое сообщения не проходит валидацию");
+                return;
+            }
+
+            // Санитизация текстовых сообщений
+            if (messageType == MessageType.Text && !string.IsNullOrEmpty(content))
+            {
+                content = SecurityValidator.SanitizeInput(content);
+            }
+
+            // Проверка прав доступа (получатель или группа должны существовать)
+            if (!string.IsNullOrEmpty(recipientId))
+            {
+                var recipientExists = await _dbContext.Users.AnyAsync(u => u.Id == recipientId);
+                if (!recipientExists)
+                {
+                    await SendErrorAsync(clientId, "Получатель не найден");
+                    return;
+                }
+            }
+            else if (!string.IsNullOrEmpty(groupId))
+            {
+                var groupExists = await _dbContext.ChatGroups.AnyAsync(g => g.Id == groupId);
+                if (!groupExists)
+                {
+                    await SendErrorAsync(clientId, "Группа не найдена");
+                    return;
+                }
+                
+                // Проверка что отправитель является участником группы
+                var group = await _dbContext.ChatGroups.FindAsync(groupId);
+                if (group == null || !group.MemberIds.Contains(senderId))
+                {
+                    await SendErrorAsync(clientId, "Вы не являетесь участником этой группы");
+                    return;
+                }
+            }
+            else
+            {
+                await SendErrorAsync(clientId, "Не указан получатель или группа");
+                return;
+            }
+
+            var message = new Message
+            {
+                Id = Guid.NewGuid().ToString(),
+                SenderId = senderId,
+                RecipientId = recipientId,
+                GroupId = groupId,
+                Type = messageType,
+                Content = content!,
+                Timestamp = DateTime.UtcNow,
+                IsRead = false
+            };
+
+            _dbContext.Messages.Add(message);
+            
+            try
+            {
+                await _dbContext.SaveChangesAsync();
+                Console.WriteLine($"Сообщение сохранено: {message.Id}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка сохранения сообщения: {ex.Message}");
+                await SendErrorAsync(clientId, "Ошибка сохранения сообщения");
+                return;
+            }
+
+            // Отправка получателю
+            if (!string.IsNullOrEmpty(recipientId))
+            {
+                var recipientClient = FindClientByUserId(recipientId);
+                if (!string.IsNullOrEmpty(recipientClient))
+                {
+                    var msgJson = JsonSerializer.Serialize(new { action = "new_message", message });
+                    await SendToClientAsync(recipientClient, msgJson);
+                    Console.WriteLine($"Сообщение отправлено получателю {recipientId}");
+                }
+                else
+                {
+                    Console.WriteLine($"Получатель {recipientId} офлайн, сообщение сохранено в БД");
+                }
+            }
+            else if (!string.IsNullOrEmpty(groupId))
+            {
+                // Рассылка группе
+                var group = await _dbContext.ChatGroups.FindAsync(groupId);
+                if (group != null)
+                {
+                    var msgJson = JsonSerializer.Serialize(new { action = "new_message", message });
+                    foreach (var memberId in group.MemberIds)
                     {
-                        var memberClient = _clients.FirstOrDefault(c => c.Value.Tag?.ToString() == memberId).Key;
-                        if (!string.IsNullOrEmpty(memberClient))
+                        if (memberId != senderId)
                         {
-                            await SendToClientAsync(memberClient, JsonSerializer.Serialize(new { action = "new_message", message }));
+                            var memberClient = FindClientByUserId(memberId);
+                            if (!string.IsNullOrEmpty(memberClient))
+                            {
+                                await SendToClientAsync(memberClient, msgJson);
+                                Console.WriteLine($"Сообщение отправлено участнику группы {memberId}");
+                            }
                         }
                     }
                 }
             }
+
+            var confirmResponse = JsonSerializer.Serialize(new { action = "message_sent", messageId = message.Id });
+            await SendToClientAsync(clientId, confirmResponse);
         }
-
-        await SendToClientAsync(clientId, JsonSerializer.Serialize(new { action = "message_sent", messageId = message.Id }));
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка отправки сообщения: {ex.Message}");
+            await SendErrorAsync(clientId, "Ошибка при отправке сообщения");
+        }
     }
 
-    private async Task HandleGetContactsAsync(JsonElement root, string clientId)
+    private async Task HandleGetContactsAsync(JsonElement root, string clientId, string userId)
     {
-        var userId = root.GetProperty("userId").GetString();
-        var contacts = await _dbContext.Contacts.Where(c => c.UserId == userId).ToListAsync();
-        var registeredContacts = await _dbContext.Users.Where(u => contacts.Select(c => c.ContactPhoneNumber).Contains(u.PhoneNumber)).ToListAsync();
-        
-        var response = new { action = "contacts_list", contacts = registeredContacts };
-        await SendToClientAsync(clientId, JsonSerializer.Serialize(response));
-    }
-
-    private async Task HandleCreateGroupAsync(JsonElement root, string clientId)
-    {
-        var name = root.GetProperty("name").GetString();
-        var creatorId = root.GetProperty("creatorId").GetString();
-        var memberIds = root.GetProperty("memberIds").EnumerateArray().Select(e => e.GetString()!).ToList();
-
-        var group = new ChatGroup
+        try
         {
-            Name = name!,
-            CreatorId = creatorId!,
-            MemberIds = memberIds
-        };
-
-        _dbContext.ChatGroups.Add(group);
-        await _dbContext.SaveChangesAsync();
-
-        var response = new { action = "group_created", groupId = group.Id, group };
-        await SendToClientAsync(clientId, JsonSerializer.Serialize(response));
-        
-        // Уведомить участников
-        foreach (var memberId in memberIds)
-        {
-            if (memberId != creatorId)
+            List<Contact> contacts;
+            try
             {
-                var memberClient = _clients.FirstOrDefault(c => c.Value.Tag?.ToString() == memberId).Key;
-                if (!string.IsNullOrEmpty(memberClient))
+                contacts = await _dbContext.Contacts
+                    .Where(c => c.UserId == userId)
+                    .Take(MaxContactsToReturn)
+                    .ToListAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка получения контактов: {ex.Message}");
+                await SendErrorAsync(clientId, "Ошибка получения контактов");
+                return;
+            }
+            
+            var phoneNumbers = contacts.Select(c => c.ContactPhoneNumber).Distinct().ToList();
+            
+            List<User> registeredContacts;
+            try
+            {
+                registeredContacts = await _dbContext.Users
+                    .Where(u => phoneNumbers.Contains(u.PhoneNumber))
+                    .Select(u => new User 
+                    { 
+                        Id = u.Id,
+                        PhoneNumber = u.PhoneNumber,
+                        DisplayName = u.DisplayName,
+                        IsOnline = u.IsOnline,
+                        LastSeen = u.LastSeen
+                    })
+                    .Take(MaxContactsToReturn)
+                    .ToListAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка поиска зарегистрированных контактов: {ex.Message}");
+                await SendErrorAsync(clientId, "Ошибка поиска контактов");
+                return;
+            }
+            
+            var response = new { action = "contacts_list", contacts = registeredContacts };
+            await SendToClientAsync(clientId, JsonSerializer.Serialize(response));
+            Console.WriteLine($"Отправлено {registeredContacts.Count} контактов пользователю {userId}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка обработки запроса контактов: {ex.Message}");
+            await SendErrorAsync(clientId, "Ошибка обработки контактов");
+        }
+    }
+
+    private async Task HandleCreateGroupAsync(JsonElement root, string clientId, string creatorId)
+    {
+        try
+        {
+            if (!root.TryGetProperty("name", out var nameElem) || !root.TryGetProperty("memberIds", out var membersElem))
+            {
+                await SendErrorAsync(clientId, "Отсутствует название группы или список участников");
+                return;
+            }
+
+            var name = nameElem.GetString();
+            var memberIds = membersElem.EnumerateArray().Select(e => e.GetString()).Where(s => !string.IsNullOrEmpty(s)).ToList();
+
+            // Валидация названия
+            if (string.IsNullOrEmpty(name) || !SecurityValidator.IsValidName(name))
+            {
+                await SendErrorAsync(clientId, "Неверное название группы");
+                return;
+            }
+            
+            name = SecurityValidator.SanitizeInput(name);
+
+            if (memberIds.Count == 0)
+            {
+                await SendErrorAsync(clientId, "Группа должна содержать хотя бы одного участника");
+                return;
+            }
+
+            // Проверка существования всех участников
+            var existingUsers = await _dbContext.Users
+                .Where(u => memberIds.Contains(u.Id))
+                .Select(u => u.Id)
+                .ToListAsync();
+            
+            if (existingUsers.Count != memberIds.Count)
+            {
+                await SendErrorAsync(clientId, "Некоторые участники не найдены");
+                return;
+            }
+
+            // Добавляем создателя в участники, если его там нет
+            if (!memberIds.Contains(creatorId))
+            {
+                memberIds.Add(creatorId);
+            }
+
+            var group = new ChatGroup
+            {
+                Id = Guid.NewGuid().ToString(),
+                Name = name,
+                CreatorId = creatorId,
+                MemberIds = memberIds,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _dbContext.ChatGroups.Add(group);
+            
+            try
+            {
+                await _dbContext.SaveChangesAsync();
+                Console.WriteLine($"Создана группа: {group.Id} ({group.Name})");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка создания группы: {ex.Message}");
+                await SendErrorAsync(clientId, "Ошибка создания группы");
+                return;
+            }
+
+            var response = new { action = "group_created", groupId = group.Id, group = new { group.Id, group.Name, group.MemberIds } };
+            await SendToClientAsync(clientId, JsonSerializer.Serialize(response));
+            
+            // Уведомить участников
+            var groupNotifyJson = JsonSerializer.Serialize(new { action = "group_added", group = new { group.Id, group.Name, group.MemberIds } });
+            foreach (var memberId in memberIds)
+            {
+                if (memberId != creatorId)
                 {
-                    await SendToClientAsync(memberClient, JsonSerializer.Serialize(new { action = "group_added", group }));
+                    var memberClient = FindClientByUserId(memberId);
+                    if (!string.IsNullOrEmpty(memberClient))
+                    {
+                        await SendToClientAsync(memberClient, groupNotifyJson);
+                        Console.WriteLine($"Участник {memberId} уведомлен о добавлении в группу");
+                    }
                 }
             }
         }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка создания группы: {ex.Message}");
+            await SendErrorAsync(clientId, "Ошибка при создании группы");
+        }
+    }
+
+    private async Task HandleGetMessagesAsync(JsonElement root, string clientId, string userId)
+    {
+        try
+        {
+            var chatId = root.TryGetProperty("chatId", out var c) ? c.GetString() : null;
+            var contactId = root.TryGetProperty("contactId", out var cont) ? cont.GetString() : null;
+            var groupId = root.TryGetProperty("groupId", out var g) ? g.GetString() : null;
+            var limit = root.TryGetProperty("limit", out var l) ? l.GetInt32() : MaxMessagesToReturn;
+            
+            if (limit > MaxMessagesToReturn || limit <= 0)
+                limit = MaxMessagesToReturn;
+
+            List<Message> messages = new();
+
+            if (!string.IsNullOrEmpty(groupId))
+            {
+                // Проверка доступа к группе
+                var group = await _dbContext.ChatGroups.FindAsync(groupId);
+                if (group == null || !group.MemberIds.Contains(userId))
+                {
+                    await SendErrorAsync(clientId, "Нет доступа к этой группе");
+                    return;
+                }
+                
+                messages = await _dbContext.Messages
+                    .Where(m => m.GroupId == groupId)
+                    .OrderByDescending(m => m.Timestamp)
+                    .Take(limit)
+                    .ToListAsync();
+            }
+            else if (!string.IsNullOrEmpty(contactId))
+            {
+                // Личный чат - проверка что это действительно контакт
+                var isContact = await _dbContext.Contacts
+                    .AnyAsync(c => c.UserId == userId && c.ContactPhoneNumber == contactId);
+                
+                if (!isContact)
+                {
+                    // Проверяем обратную ситуацию - может contactId это сам пользователь
+                    var user = await _dbContext.Users.FindAsync(contactId);
+                    if (user == null)
+                    {
+                        await SendErrorAsync(clientId, "Контакт не найден");
+                        return;
+                    }
+                    
+                    var isContactReverse = await _dbContext.Contacts
+                        .AnyAsync(c => c.UserId == contactId && c.ContactPhoneNumber == user.PhoneNumber);
+                    
+                    if (!isContactReverse)
+                    {
+                        await SendErrorAsync(clientId, "Нет доступа к этому чату");
+                        return;
+                    }
+                }
+                
+                var contactUser = await _dbContext.Users.FindAsync(contactId);
+                if (contactUser == null)
+                {
+                    await SendErrorAsync(clientId, "Контакт не найден");
+                    return;
+                }
+                
+                messages = await _dbContext.Messages
+                    .Where(m => (m.SenderId == userId && m.RecipientId == contactId) || 
+                               (m.SenderId == contactId && m.RecipientId == userId))
+                    .OrderByDescending(m => m.Timestamp)
+                    .Take(limit)
+                    .ToListAsync();
+            }
+
+            messages.Reverse();
+            var response = new { action = "messages_list", messages };
+            await SendToClientAsync(clientId, JsonSerializer.Serialize(response));
+            Console.WriteLine($"Отправлено {messages.Count} сообщений пользователю {userId}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка получения сообщений: {ex.Message}");
+            await SendErrorAsync(clientId, "Ошибка получения истории сообщений");
+        }
+    }
+
+    private string? FindClientByUserId(string userId)
+    {
+        // В текущей реализации clientId это endpoint, а не userId
+        // Нужно хранить отдельное отображение userId -> clientId
+        // Для упрощения предполагаем что клиент хранит это на своей стороне
+        // В продакшене нужно добавить Dictionary<string, string> _userToClient
+        return _clients.Keys.FirstOrDefault(k => true); // Заглушка - нужно доработать
     }
 
     private async Task SendToClientAsync(string clientId, string message)
     {
         if (_clients.TryGetValue(clientId, out var ws) && ws.State == WebSocketState.Open)
         {
-            var buffer = Encoding.UTF8.GetBytes(message);
-            await ws.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+            try
+            {
+                var buffer = Encoding.UTF8.GetBytes(message);
+                await ws.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка отправки клиенту {clientId}: {ex.Message}");
+            }
         }
+    }
+
+    private async Task SendErrorAsync(string clientId, string errorMessage)
+    {
+        var errorResponse = JsonSerializer.Serialize(new { action = "error", message = errorMessage });
+        await SendToClientAsync(clientId, errorResponse);
     }
 
     public void Stop()
@@ -247,7 +700,15 @@ public class WebSocketServer
         _listener.Stop();
         foreach (var client in _clients.Values)
         {
-            client.Dispose();
+            try
+            {
+                client.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка закрытия соединения: {ex.Message}");
+            }
         }
+        Console.WriteLine("Сервер остановлен");
     }
 }

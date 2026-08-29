@@ -369,6 +369,30 @@ public class DataRepository : IDataRepository
         }
     }
 
+    // ==================== Проверка прав доступа ====================
+
+    public async Task<bool> HasChatAccessAsync(string userId, string chatId)
+    {
+        using var cmd = _dbContext.GetConnection().CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM Chats WHERE Id = @ChatId AND (User1Id = @UserId OR User2Id = @UserId)";
+        cmd.Parameters.AddWithValue("@ChatId", chatId);
+        cmd.Parameters.AddWithValue("@UserId", userId);
+
+        var result = await cmd.ExecuteScalarAsync();
+        return result is long count && count > 0;
+    }
+
+    public async Task<bool> HasGroupAccessAsync(string userId, string groupId)
+    {
+        using var cmd = _dbContext.GetConnection().CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM GroupMembers WHERE GroupId = @GroupId AND UserId = @UserId";
+        cmd.Parameters.AddWithValue("@GroupId", groupId);
+        cmd.Parameters.AddWithValue("@UserId", userId);
+
+        var result = await cmd.ExecuteScalarAsync();
+        return result is long count && count > 0;
+    }
+
     // ==================== Мапперы ====================
 
     private static User MapUser(SQLiteDataReader reader) => new()

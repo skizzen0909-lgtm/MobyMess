@@ -2,11 +2,12 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using SecureLinkServer.Core.Interfaces;
 using SecureLinkServer.Core.Models;
+using SecureLinkServer.Security;
 
 namespace SecureLinkServer.Core.Services;
 
 /// <summary>
-/// Обработчик сообщений
+/// Обработчик сообщений с валидацией данных
 /// </summary>
 public class MessageHandler : IMessageHandler
 {
@@ -31,6 +32,13 @@ public class MessageHandler : IMessageHandler
     {
         try
         {
+            // Валидация UUID отправителя
+            if (!SecurityValidator.IsValidUuid(connection.UserId))
+            {
+                _logger.LogWarning("Invalid user UUID: {UserId}", connection.UserId);
+                return;
+            }
+
             switch (packet.Type)
             {
                 case MessageType.Ping:
@@ -62,7 +70,7 @@ public class MessageHandler : IMessageHandler
             var errorPacket = new MessagePacket
             {
                 Type = MessageType.Error,
-                Payload = JsonConvert.SerializeObject(new { Error = ex.Message })
+                Payload = JsonConvert.SerializeObject(new { Error = "Internal server error" })
             };
             await connection.SendAsync(errorPacket);
         }
@@ -72,11 +80,35 @@ public class MessageHandler : IMessageHandler
     {
         try
         {
-            _logger.LogInformation("Received binary data: {FileName} ({Type}, {Size} bytes)", 
-                fileName, type, data.Length);
+            // Валидация имени файла (защита от Path Traversal)
+            if (!SecurityValidator.IsValidFileName(fileName))
+            {
+                _logger.LogWarning("Invalid file name from user {UserId}: {FileName}", connection.UserId, fileName);
+                return;
+            }
 
-            // Сохраняем файл
-            var filePath = await _fileStorage.SaveFileAsync(data, fileName, GetMimeType(fileName), connection.UserId);
+            var safeFileName = SecurityValidator.GetSafeFileName(fileName);
+
+            // Проверка размера файла
+            if (!SecurityValidator.IsValidFileSize(data.Length))
+            {
+                _logger.LogWarning("File too large from user {UserId}: {Size} bytes", connection.UserId, data.Length);
+                return;
+            }
+
+            // Проверка MIME-типа
+            var mimeType = GetMimeType(safeFileName);
+            if (!SecurityValidator.IsValidMimeType(mimeType))
+            {
+                _logger.LogWarning("Unsupported MIME type from user {UserId}: {MimeType}", connection.UserId, mimeType);
+                return;
+            }
+
+            _logger.LogInformation("Received binary data: {FileName} ({Type}, {Size} bytes)", 
+                safeFileName, type, data.Length);
+
+            // Сохраняем файл с безопасным именем
+            var filePath = await _fileStorage.SaveFileAsync(data, safeFileName, mimeType, connection.UserId);
 
             // Создаем сообщение о файле
             var message = new ChatMessage
@@ -84,9 +116,9 @@ public class MessageHandler : IMessageHandler
                 SenderId = connection.UserId,
                 Type = type,
                 Content = filePath,
-                FileName = fileName,
+                FileName = safeFileName,
                 FileSize = data.Length,
-                MimeType = GetMimeType(fileName)
+                MimeType = mimeType
             };
 
             // TODO: Определить chatId или groupId из контекста и сохранить сообщение
@@ -100,8 +132,9 @@ public class MessageHandler : IMessageHandler
                 Payload = JsonConvert.SerializeObject(new 
                 { 
                     FilePath = filePath,
-                    FileName = fileName,
-                    Size = data.Length
+                    FileName = safeFileName,
+                    Size = data.Length,
+                    MimeType = mimeType
                 })
             };
             await connection.SendAsync(response);
@@ -133,12 +166,22 @@ public class MessageHandler : IMessageHandler
         if (messageData == null)
             return;
 
+        // Валидация текста сообщения
+        if (!SecurityValidator.IsValidMessage(messageData.Text, "text"))
+        {
+            _logger.LogWarning("Invalid message content from user {UserId}", connection.UserId);
+            return;
+        }
+
+        // Санитизация входных данных
+        var sanitizedText = SecurityValidator.SanitizeInput(messageData.Text);
+
         var chatMessage = new ChatMessage
         {
             ChatId = messageData.ChatId,
             SenderId = connection.UserId,
             Type = MessageType.TextMessage,
-            Content = messageData.Text
+            Content = sanitizedText
         };
 
         await _repository.SaveMessageAsync(chatMessage);
@@ -147,6 +190,15 @@ public class MessageHandler : IMessageHandler
         var recipientId = messageData.RecipientId;
         if (!string.IsNullOrEmpty(recipientId))
         {
+            // Проверка прав доступа - пользователь может писать только в свои чаты
+            var hasAccess = await _repository.HasChatAccessAsync(connection.UserId, messageData.ChatId);
+            if (!hasAccess)
+            {
+                _logger.LogWarning("User {UserId} tried to send message to unauthorized chat {ChatId}", 
+                    connection.UserId, messageData.ChatId);
+                return;
+            }
+
             var responsePacket = new MessagePacket
             {
                 Type = MessageType.TextMessage,
@@ -154,7 +206,7 @@ public class MessageHandler : IMessageHandler
                 Payload = JsonConvert.SerializeObject(new
                 {
                     ChatId = messageData.ChatId,
-                    Text = messageData.Text,
+                    Text = sanitizedText,
                     Timestamp = chatMessage.SentAt.ToUnixTimeMilliseconds()
                 })
             };
@@ -171,17 +223,36 @@ public class MessageHandler : IMessageHandler
         if (groupData == null)
             return;
 
+        // Валидация названия группы
+        if (!SecurityValidator.IsValidName(groupData.Name))
+        {
+            _logger.LogWarning("Invalid group name from user {UserId}", connection.UserId);
+            return;
+        }
+
+        var groupName = SecurityValidator.SanitizeInput(groupData.Name);
+
         var group = new Group
         {
-            Name = groupData.Name,
+            Name = groupName,
             CreatorId = connection.UserId,
             MemberIds = new List<string> { connection.UserId }
         };
 
-        // Добавляем участников
+        // Добавляем участников с валидацией UUID
         if (groupData.MemberIds != null)
         {
-            group.MemberIds.AddRange(groupData.MemberIds);
+            foreach (var memberId in groupData.MemberIds)
+            {
+                if (SecurityValidator.IsValidUuid(memberId))
+                {
+                    group.MemberIds.Add(memberId);
+                }
+                else
+                {
+                    _logger.LogWarning("Invalid member UUID in group creation: {MemberId}", memberId);
+                }
+            }
         }
 
         await _repository.CreateGroupAsync(group);
@@ -193,7 +264,7 @@ public class MessageHandler : IMessageHandler
             Payload = JsonConvert.SerializeObject(new
             {
                 GroupId = group.Id,
-                Name = group.Name,
+                Name = groupName,
                 MemberIds = group.MemberIds
             })
         };
@@ -210,7 +281,7 @@ public class MessageHandler : IMessageHandler
                     Payload = JsonConvert.SerializeObject(new
                     {
                         GroupId = group.Id,
-                        Name = group.Name,
+                        Name = groupName,
                         CreatorId = connection.UserId,
                         Action = "AddedToGroup"
                     })
