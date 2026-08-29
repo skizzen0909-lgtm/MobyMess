@@ -190,5 +190,19 @@ namespace SecureLinkServer.Security
             // Оставляем только цифры и +
             return Regex.Replace(phone, @"[^\d+]", "");
         }
+
+        /// <summary>
+        /// Хэширование телефонного номера для безопасного поиска
+        /// Использует SHA256 для создания хэша
+        /// </summary>
+        public static string HashPhoneNumber(string phone)
+        {
+            if (string.IsNullOrWhiteSpace(phone))
+                return string.Empty;
+
+            using var sha256 = System.Security.Cryptography.SHA256.Create();
+            var hashedBytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(phone));
+            return BitConverter.ToString(hashedBytes).Replace("-", "").ToLowerInvariant();
+        }
     }
 }

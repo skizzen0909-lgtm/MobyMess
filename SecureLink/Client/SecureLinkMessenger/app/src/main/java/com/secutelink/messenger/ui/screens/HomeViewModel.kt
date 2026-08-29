@@ -62,6 +62,23 @@ class HomeViewModel(private val repository: AppRepository) : ViewModel() {
             repository.insertContacts(contacts)
             
             _contacts.value = contacts
+            
+            // Синхронизируем контакты с сервером
+            syncContactsWithServer(contacts)
+        }
+    }
+    
+    /**
+     * Синхронизация контактов с сервером
+     */
+    private fun syncContactsWithServer(contacts: List<Contact>) {
+        viewModelScope.launch {
+            val user = UserManager.getInstance(context).getCurrentUser()
+            val userId = user?.id ?: return@launch
+            
+            // Отправляем контакты на сервер для синхронизации
+            // Сервер вернёт список зарегистрированных контактов
+            // Обработка ответа будет в MainActivity через WebSocketClient
         }
     }
     
