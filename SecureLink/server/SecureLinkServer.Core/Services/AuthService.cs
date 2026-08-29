@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using SecureLinkServer.Core.Interfaces;
 using SecureLinkServer.Core.Models;
+using SecureLinkServer.Security;
 
 namespace SecureLinkServer.Core.Services;
 
@@ -26,20 +27,34 @@ public class AuthService : IAuthService
     {
         try
         {
+            // Валидация номера телефона
+            if (!SecurityValidator.IsValidPhone(request.PhoneNumber))
+            {
+                _logger.LogWarning("Invalid phone number format: {PhoneNumber}", request.PhoneNumber);
+                return new AuthResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Invalid phone number format"
+                };
+            }
+
+            // Нормализуем номер телефона
+            var normalizedPhone = SecurityValidator.NormalizePhone(request.PhoneNumber);
+
             // Проверяем существует ли пользователь
-            var user = await _repository.GetUserByPhoneAsync(request.PhoneNumber);
+            var user = await _repository.GetUserByPhoneAsync(normalizedPhone);
 
             if (user == null)
             {
                 // Создаем нового пользователя
                 user = new User
                 {
-                    PhoneNumber = request.PhoneNumber,
-                    DisplayName = request.PhoneNumber, // По умолчанию номер телефона
+                    PhoneNumber = normalizedPhone,
+                    DisplayName = normalizedPhone, // По умолчанию номер телефона
                     IsActive = true
                 };
                 await _repository.CreateUserAsync(user);
-                _logger.LogInformation("New user registered: {PhoneNumber}", request.PhoneNumber);
+                _logger.LogInformation("New user registered: {PhoneNumber}", normalizedPhone);
             }
 
             // Генерируем токен
