@@ -15,6 +15,7 @@ public class WebSocketServer
     private readonly AppDbContext _dbContext;
     private readonly ServerSettings _settings;
     private readonly Dictionary<string, WebSocket> _clients = new();
+    private readonly Dictionary<string, string> _userToClient = new(); // userId -> clientId
     private readonly CancellationTokenSource _cts = new();
     private const int MaxMessageLength = 10000;
     private const int MaxContactsToReturn = 500;
@@ -124,6 +125,12 @@ public class WebSocketServer
                 }
             }
             
+            // Удаляем из словаря userId -> clientId
+            if (!string.IsNullOrEmpty(userId) && _userToClient.ContainsKey(userId))
+            {
+                _userToClient.Remove(userId);
+            }
+            
             _clients.Remove(clientId);
             webSocket.Dispose();
             Console.WriteLine($"Клиент отключен: {clientId}");
@@ -163,6 +170,10 @@ public class WebSocketServer
                 case "get_contacts":
                     if (!string.IsNullOrEmpty(userId))
                         await HandleGetContactsAsync(root, clientId, userId);
+                    break;
+                case "sync_contacts":
+                    if (!string.IsNullOrEmpty(userId))
+                        await HandleSyncContactsAsync(root, clientId, userId);
                     break;
                 case "create_group":
                     if (!string.IsNullOrEmpty(userId))
@@ -262,14 +273,13 @@ public class WebSocketServer
                 }
             }
 
-            // Привязка clientId к userId для поиска в словаре
+            // Привязка userId к clientId для поиска получателя
+            _userToClient[user.Id] = clientId;
+            
             if (!_clients.ContainsKey(clientId))
             {
-                _clients[clientId] = _clients.Values.First(); // заглушка, будет перезаписано
+                _clients[clientId] = webSocket;
             }
-            
-            // Сохраняем userId в метаданных подключения (через Tag, если поддерживается)
-            // В данном случае просто используем clientId как ключ для userId
             
             var response = new 
             { 
@@ -488,6 +498,96 @@ public class WebSocketServer
         }
     }
 
+    private async Task HandleSyncContactsAsync(JsonElement root, string clientId, string userId)
+    {
+        try
+        {
+            if (!root.TryGetProperty("contacts", out var contactsElem))
+            {
+                await SendErrorAsync(clientId, "Список контактов не указан");
+                return;
+            }
+
+            // Очищаем старые контакты пользователя
+            var oldContacts = await _dbContext.Contacts
+                .Where(c => c.UserId == userId)
+                .ToListAsync();
+            _dbContext.Contacts.RemoveRange(oldContacts);
+            
+            // Парсим новые контакты из запроса
+            var newContacts = new List<Contact>();
+            foreach (var contactElem in contactsElem.EnumerateArray())
+            {
+                if (!contactElem.TryGetProperty("phoneNumber", out var phoneElem) ||
+                    !contactElem.TryGetProperty("displayName", out var nameElem))
+                {
+                    continue;
+                }
+
+                var phoneNumber = phoneElem.GetString();
+                var displayName = nameElem.GetString();
+                
+                if (string.IsNullOrEmpty(phoneNumber) || string.IsNullOrEmpty(displayName))
+                    continue;
+
+                phoneNumber = SecurityValidator.NormalizePhone(phoneNumber);
+                
+                // Вычисляем хэш номера для поиска
+                var phoneHash = SecurityValidator.HashPhoneNumber(phoneNumber);
+                
+                // Проверяем, зарегистрирован ли этот контакт
+                var isRegistered = await _dbContext.Users.AnyAsync(u => u.PhoneNumber == phoneNumber);
+                
+                newContacts.Add(new Contact
+                {
+                    UserId = userId,
+                    ContactPhoneNumber = phoneNumber,
+                    ContactName = displayName,
+                    IsRegistered = isRegistered
+                });
+            }
+
+            // Сохраняем новые контакты
+            if (newContacts.Any())
+            {
+                _dbContext.Contacts.AddRange(newContacts);
+                await _dbContext.SaveChangesAsync();
+                Console.WriteLine($"Синхронизировано {newContacts.Count} контактов для пользователя {userId}");
+            }
+
+            // Возвращаем список зарегистрированных контактов
+            var registeredPhones = newContacts.Where(c => c.IsRegistered).Select(c => c.ContactPhoneNumber).ToList();
+            
+            var registeredUsers = await _dbContext.Users
+                .Where(u => registeredPhones.Contains(u.PhoneNumber))
+                .Select(u => new 
+                { 
+                    Id = u.Id,
+                    PhoneNumber = u.PhoneNumber,
+                    DisplayName = u.DisplayName,
+                    IsOnline = u.IsOnline,
+                    LastSeen = u.LastSeen
+                })
+                .Take(MaxContactsToReturn)
+                .ToListAsync();
+
+            var response = new 
+            { 
+                action = "sync_contacts_result", 
+                contacts = registeredUsers,
+                totalCount = newContacts.Count,
+                registeredCount = registeredUsers.Count
+            };
+            await SendToClientAsync(clientId, JsonSerializer.Serialize(response));
+            Console.WriteLine($"Отправлено {registeredUsers.Count} зарегистрированных контактов пользователю {userId}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка синхронизации контактов: {ex.Message}");
+            await SendErrorAsync(clientId, "Ошибка синхронизации контактов");
+        }
+    }
+
     private async Task HandleCreateGroupAsync(JsonElement root, string clientId, string creatorId)
     {
         try
@@ -667,11 +767,12 @@ public class WebSocketServer
 
     private string? FindClientByUserId(string userId)
     {
-        // В текущей реализации clientId это endpoint, а не userId
-        // Нужно хранить отдельное отображение userId -> clientId
-        // Для упрощения предполагаем что клиент хранит это на своей стороне
-        // В продакшене нужно добавить Dictionary<string, string> _userToClient
-        return _clients.Keys.FirstOrDefault(k => true); // Заглушка - нужно доработать
+        // Поиск clientId по userId через словарь _userToClient
+        if (_userToClient.TryGetValue(userId, out var clientId))
+        {
+            return clientId;
+        }
+        return null;
     }
 
     private async Task SendToClientAsync(string clientId, string message)

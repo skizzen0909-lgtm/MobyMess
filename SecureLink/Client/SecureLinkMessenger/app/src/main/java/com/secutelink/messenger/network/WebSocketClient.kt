@@ -119,6 +119,32 @@ class WebSocketClient(private val context: Context) {
         send(gson.toJson(request))
     }
 
+    /**
+     * Синхронизирует контакты с сервером
+     * Отправляет список контактов для проверки регистрации
+     */
+    fun syncContacts(userId: String, contacts: List<Map<String, String>>) {
+        val request = mapOf(
+            "action" to "sync_contacts",
+            "userId" to userId,
+            "contacts" to contacts
+        )
+        send(gson.toJson(request))
+    }
+
+    /**
+     * Удобный метод для синхронизации контактов из списка Contact
+     */
+    fun syncContacts(userId: String, contacts: List<Contact>) {
+        val contactList = contacts.map { contact ->
+            mapOf(
+                "phoneNumber" to contact.phoneNumber,
+                "displayName" to contact.displayName
+            )
+        }
+        syncContacts(userId, contactList)
+    }
+
     fun createGroup(name: String, creatorId: String, memberIds: List<String>) {
         val request = mapOf(
             "action" to "create_group",
