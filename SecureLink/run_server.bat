@@ -7,13 +7,13 @@ echo    SecureLink Messenger Server Launcher
 echo ============================================
 echo.
 
-REM Проверка наличия dotnet
-echo [1/3] Проверка установленного .NET SDK...
+REM Check for .NET SDK
+echo [1/3] Checking for .NET SDK...
 where dotnet >nul 2>nul
 if %ERRORLEVEL% neq 0 (
-    echo ❌ ОШИБКА: .NET SDK не найден!
+    echo [ERROR] .NET SDK not found!
     echo.
-    echo Пожалуйста, установите .NET 8 SDK:
+    echo Please install .NET 8 SDK:
     echo https://dotnet.microsoft.com/download/dotnet/8.0
     echo.
     pause
@@ -21,31 +21,31 @@ if %ERRORLEVEL% neq 0 (
 )
 
 for /f "tokens=*" %%i in ('dotnet --version') do set DOTNET_VERSION=%%i
-echo ✅ Обнаружена версия .NET: %DOTNET_VERSION%
+echo [INFO] .NET version: %DOTNET_VERSION%
 echo.
 
-REM Переход в директорию с решением
-cd /d "%~dp0SecureLink\Server" || (
-    echo ❌ ОШИБКА: Не удалось перейти в директорию SecureLink\Server
+REM Change to Server directory
+cd /d "%~dp0Server" || (
+    echo [ERROR] Failed to navigate to Server directory
     pause
     exit /b 1
 )
 
-echo [2/3] Сборка проекта...
+echo [2/3] Building project...
 dotnet build SecureLink.Server.sln --configuration Release
 if %ERRORLEVEL% neq 0 (
     echo.
-    echo ❌ ОШИБКА: Сборка проекта не удалась!
-    echo Проверьте логи ошибок выше.
+    echo [ERROR] Build failed!
+    echo Check error logs above.
     pause
     exit /b 1
 )
-echo ✅ Сборка завершена успешно.
+echo [SUCCESS] Build completed.
 echo.
 
-echo [3/3] Запуск сервера...
+echo [3/3] Starting server...
 echo ============================================
-echo Сервер запущен! Нажмите Ctrl+C для остановки.
+echo Server is running! Press Ctrl+C to stop.
 echo ============================================
 echo.
 
