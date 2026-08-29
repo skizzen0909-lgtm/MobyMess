@@ -14,7 +14,7 @@ public enum MessageType
 
 public class Message
 {
-    public long Id { get; set; }
+    public string Id { get; set; } = string.Empty;
     public string SenderId { get; set; } = string.Empty;
     public string? RecipientId { get; set; } // null для групп
     public string? GroupId { get; set; } // null для личных

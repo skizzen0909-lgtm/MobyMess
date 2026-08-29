@@ -32,7 +32,7 @@ cd /d "%~dp0Server" || (
 )
 
 echo [2/3] Building project...
-dotnet build SecureLink.Server.sln --configuration Release
+dotnet build SecureLink.Server.sln --configuration Release --no-incremental
 if %ERRORLEVEL% neq 0 (
     echo.
     echo [ERROR] Build failed!
