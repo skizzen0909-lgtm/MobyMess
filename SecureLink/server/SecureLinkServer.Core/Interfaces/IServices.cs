@@ -61,6 +61,10 @@ public interface IDataRepository
     // Контакты
     Task<List<Contact>> GetContactsAsync(string userId);
     Task SyncContactsAsync(string userId, List<Contact> contacts);
+    
+    // Проверка прав доступа
+    Task<bool> HasChatAccessAsync(string userId, string chatId);
+    Task<bool> HasGroupAccessAsync(string userId, string groupId);
 }
 
 /// <summary>
