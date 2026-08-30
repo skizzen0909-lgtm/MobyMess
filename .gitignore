@@ -2,16 +2,13 @@
 # Build artifacts
 bin/
 obj/
-*.dll
 *.exe
+*.dll
 *.pdb
-*.config
-*.runtimeconfig.json
+*.userprefs
 
 # Dependencies
 packages/
-node_modules/
-lib/
 
 # Logs
 *.log
@@ -19,20 +16,15 @@ lib/
 # Environment
 .env
 .env.local
-*.user
-*.userosscache
-*.suo
+*.env.*
 
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# IDE
-.vs/
+# Editors
+.vscode/
 .idea/
 *.swp
 *.swo
 
-# Test results
-TestResults/
+# OS
+.DS_Store
+Thumbs.db
 ```
